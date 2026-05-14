@@ -1,1 +1,41 @@
 
+name: Build Gamma Levels
+
+on:
+  schedule:
+    # 6:30am ET = 10:30 UTC (EDT) / 11:30 UTC (EST)
+    # Run both; the script no-ops if it's the wrong one for current DST.
+    # Mon-Fri only.
+    - cron: '30 10 * * 1-5'   # EDT (Mar-Nov)
+    - cron: '30 11 * * 1-5'   # EST (Nov-Mar)
+  workflow_dispatch:          # manual trigger button in GitHub UI
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write         # needs to commit gamma.json back to repo
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install yfinance pandas numpy scipy
+
+      - name: Build gamma.json
+        run: python scripts/build_gamma.py
+
+      - name: Commit if changed
+        run: |
+          git config user.name  "gamma-bot"
+          git config user.email "gamma-bot@steelytraders.com"
+          git add data/gamma.json data/history/
+          if git diff --cached --quiet; then
+            echo "No changes."
+          else
+            git commit -m "gamma: $(date -u +%Y-%m-%d)"
+            git push
+          fi
