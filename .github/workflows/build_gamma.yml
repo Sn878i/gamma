@@ -1,4 +1,3 @@
-
 name: Build Gamma Levels
 
 on:
@@ -26,13 +25,18 @@ jobs:
         run: pip install yfinance pandas numpy scipy
 
       - name: Build gamma.json
-        run: python scripts/build_gamma.py
+        run: |
+          python scripts/build_gamma.py
+          mkdir -p public
+          cp data/gamma.json public/gamma.json
+          mkdir -p public/history
+          cp -r data/history/* public/history/ 2>/dev/null || true
 
       - name: Commit if changed
         run: |
           git config user.name  "gamma-bot"
-          git config user.email "gamma-bot@steelytraders.com"
-          git add data/gamma.json data/history/
+          git config user.email "gamma-bot@steelysystems.com"
+          git add data/gamma.json data/history/ public/
           if git diff --cached --quiet; then
             echo "No changes."
           else
