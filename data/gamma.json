@@ -1,25 +1,25 @@
 {
   "version": "1.0",
-  "generated_at": "2026-05-14T03:14:10.688600+00:00",
+  "generated_at": "2026-05-14T12:11:57.695348+00:00",
   "trade_date": "2026-05-14",
   "source": "yfinance/SPY",
   "spy_spot": 742.31,
   "spx_spot_est": 7423.1,
-  "nq_spot": 29603.25,
-  "spx_nq_ratio": 0.25075,
+  "nq_spot": 29550.0,
+  "spx_nq_ratio": 0.2512,
   "spy": {
     "call_wall": 745.0,
-    "put_wall": 730.0,
-    "zero_gamma": 744.5088145348325
+    "put_wall": 737.0,
+    "zero_gamma": 742.0005004423239
   },
   "spx": {
     "call_wall": 7450.0,
-    "put_wall": 7300.0,
-    "zero_gamma": 7445.09
+    "put_wall": 7370.0,
+    "zero_gamma": 7420.01
   },
   "nq": {
-    "call_wall": 29710.53,
-    "put_wall": 29112.33,
-    "zero_gamma": 29690.95
+    "call_wall": 29657.08,
+    "put_wall": 29338.62,
+    "zero_gamma": 29537.7
   }
 }
