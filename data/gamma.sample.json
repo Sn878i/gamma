@@ -1,0 +1,19 @@
+{
+  "version": "1.0",
+  "generated_at": "2026-05-13T10:35:00Z",
+  "trade_date": "2026-05-13",
+  "source": "yfinance/SPX",
+  "spx_spot": 5234.50,
+  "nq_spot": 18695.25,
+  "spx_nq_ratio": 0.27999,
+  "spx": {
+    "call_wall": 5275.0,
+    "put_wall": 5200.0,
+    "zero_gamma": 5238.42
+  },
+  "nq": {
+    "call_wall": 18840.12,
+    "put_wall": 18572.45,
+    "zero_gamma": 18708.65
+  }
+}
