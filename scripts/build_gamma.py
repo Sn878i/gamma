@@ -1,13 +1,25 @@
 """
-build_gamma.py
-Fetches SPY option chain via yfinance (denser OI than ^SPX), computes call wall /
-put wall / zero gamma, converts SPY -> SPX-equivalent -> NQ-equivalent, writes
-data/gamma.json.
+build_gamma.py <instrument>
+  <instrument> = "nq" (uses QQQ chain) or "es" (uses SPY chain)
 
-Why SPY instead of ^SPX:
-- SPY has 10x more strikes traded and denser OI distribution.
-- ^SPX often has gaps that cause put_wall / zero_gamma to compute as None.
-- SPY price ~= SPX / 10, so we multiply SPY strikes by 10 to get SPX equivalents.
+Computes gamma_flip, put_wall, call_wall, hvl, vol_trigger for the futures
+instrument by analyzing the corresponding ETF option chain and scaling levels
+to futures price via the live ETF/future ratio.
+
+Schema (matches IUXX/Barchart convention):
+{
+  "instrument": "nq",
+  "symbol": "$IUXX",
+  "date": "...",
+  "fetched_at": "...",
+  "gamma_flip": ...,
+  "put_wall": ...,
+  "call_wall": ...,
+  "hvl": ...,            # synonym for gamma_flip
+  "vol_trigger": ...,    # last positive-gamma strike below spot
+  "source": "yfinance_gex",
+  "stale": false
+}
 """
 
 import json
@@ -21,15 +33,28 @@ import yfinance as yf
 from scipy.stats import norm
 
 
-# ---------- config ----------
-SPY_TICKER = "SPY"
-NQ_TICKER  = "NQ=F"
-SPY_TO_SPX = 10.0
-RISK_FREE  = 0.045
-DTE_MAX    = 45
-STRIKE_WINDOW = 0.15
-OUT_PATH   = Path("data/gamma.json")
-HIST_DIR   = Path("data/history")
+# ---------- instrument config ----------
+INSTRUMENTS = {
+    "nq": {
+        "etf_ticker": "QQQ",
+        "future_ticker": "NQ=F",
+        "symbol": "$IUXX",
+    },
+    "es": {
+        "etf_ticker": "SPY",
+        "future_ticker": "ES=F",
+        "symbol": "$ISPX",
+    },
+}
+
+# ---------- math config ----------
+RISK_FREE     = 0.045
+DTE_MAX       = 60
+STRIKE_WINDOW = 0.20
+
+# ---------- output paths ----------
+OUT_DIR  = Path("data/gamma")
+HIST_DIR = Path("data/history")
 
 
 def bs_gamma(S, K, T, r, sigma):
@@ -74,6 +99,7 @@ def fetch_chain(ticker_symbol: str, spot: float) -> pd.DataFrame:
 
 
 def compute_levels(chain: pd.DataFrame, spot: float) -> dict:
+    """Returns ETF-scale strikes for all 5 levels."""
     chain["gamma"] = chain.apply(
         lambda r: bs_gamma(spot, r["strike"], r["T"], RISK_FREE, r["impliedVolatility"]),
         axis=1,
@@ -85,14 +111,17 @@ def compute_levels(chain: pd.DataFrame, spot: float) -> dict:
         call_gex=("gex", lambda s: s[chain.loc[s.index, "kind"] == "C"].sum()),
         put_gex =("gex", lambda s: s[chain.loc[s.index, "kind"] == "P"].sum()),
         net_gex =("gex", "sum"),
-    ).reset_index().sort_values("strike")
+    ).reset_index().sort_values("strike").reset_index(drop=True)
 
+    # call wall = strike above spot with max call GEX
     above = by_strike[by_strike["strike"] > spot]
     call_wall = float(above.loc[above["call_gex"].idxmax(), "strike"]) if not above.empty else None
 
+    # put wall = strike below spot with most negative put GEX
     below = by_strike[by_strike["strike"] < spot]
     put_wall = float(below.loc[below["put_gex"].idxmin(), "strike"]) if not below.empty else None
 
+    # gamma_flip / hvl = interpolated zero crossing of cumulative net GEX
     by_strike["cum_gex"] = by_strike["net_gex"].cumsum()
     sign = np.sign(by_strike["cum_gex"].values)
     flips = np.where(np.diff(sign) != 0)[0]
@@ -100,74 +129,91 @@ def compute_levels(chain: pd.DataFrame, spot: float) -> dict:
         i = flips[0]
         s0, s1 = by_strike["strike"].iloc[i], by_strike["strike"].iloc[i + 1]
         g0, g1 = by_strike["cum_gex"].iloc[i], by_strike["cum_gex"].iloc[i + 1]
-        zero_gamma = float(s0 + (s1 - s0) * (-g0) / (g1 - g0))
+        gamma_flip = float(s0 + (s1 - s0) * (-g0) / (g1 - g0))
     else:
-        zero_gamma = None
+        gamma_flip = None
 
-    return {"call_wall": call_wall, "put_wall": put_wall, "zero_gamma": zero_gamma}
+    # vol_trigger = highest strike below spot where net_gex is still positive
+    below_pos = by_strike[(by_strike["strike"] < spot) & (by_strike["net_gex"] > 0)]
+    vol_trigger = float(below_pos["strike"].max()) if not below_pos.empty else None
+
+    return {
+        "call_wall":   call_wall,
+        "put_wall":    put_wall,
+        "gamma_flip":  gamma_flip,
+        "hvl":         gamma_flip,    # synonym
+        "vol_trigger": vol_trigger,
+    }
 
 
-def scale_to_spx(spy_levels: dict) -> dict:
-    return {k: (round(v * SPY_TO_SPX, 2) if v is not None else None)
-            for k, v in spy_levels.items()}
+def scale_to_future(etf_levels: dict, ratio: float) -> dict:
+    """ratio = future_spot / etf_spot. Apply to all 5 levels."""
+    return {k: (round(v * ratio, 2) if v is not None else None)
+            for k, v in etf_levels.items()}
 
 
-def spx_to_nq(spx_levels: dict, ratio: float) -> dict:
-    return {k: (round(v / ratio, 2) if v is not None else None)
-            for k, v in spx_levels.items()}
+def build(instrument: str):
+    if instrument not in INSTRUMENTS:
+        raise ValueError(f"Unknown instrument: {instrument}. Use 'nq' or 'es'.")
+    cfg = INSTRUMENTS[instrument]
 
-
-def main():
-    spy = yf.Ticker(SPY_TICKER).history(period="1d")
-    nq  = yf.Ticker(NQ_TICKER).history(period="1d")
-    if spy.empty or nq.empty:
-        print("ERROR: spot fetch failed", file=sys.stderr)
+    etf    = yf.Ticker(cfg["etf_ticker"]).history(period="1d")
+    future = yf.Ticker(cfg["future_ticker"]).history(period="1d")
+    if etf.empty or future.empty:
+        print(f"ERROR: spot fetch failed for {instrument}", file=sys.stderr)
         sys.exit(1)
 
-    spy_spot = float(spy["Close"].iloc[-1])
-    nq_spot  = float(nq["Close"].iloc[-1])
-    spx_spot_est = spy_spot * SPY_TO_SPX
-    ratio = spx_spot_est / nq_spot
+    etf_spot    = float(etf["Close"].iloc[-1])
+    future_spot = float(future["Close"].iloc[-1])
+    ratio       = future_spot / etf_spot
 
-    print(f"SPY={spy_spot:.2f}  SPX~={spx_spot_est:.2f}  NQ={nq_spot:.2f}  SPX/NQ ratio={ratio:.5f}")
+    print(f"[{instrument.upper()}] {cfg['etf_ticker']}={etf_spot:.2f}  "
+          f"{cfg['future_ticker']}={future_spot:.2f}  ratio={ratio:.4f}")
 
-    chain = fetch_chain(SPY_TICKER, spy_spot)
-    spy_levels = compute_levels(chain, spy_spot)
-    spx_levels = scale_to_spx(spy_levels)
-    nq_levels  = spx_to_nq(spx_levels, ratio)
+    chain         = fetch_chain(cfg["etf_ticker"], etf_spot)
+    etf_levels    = compute_levels(chain, etf_spot)
+    future_levels = scale_to_future(etf_levels, ratio)
 
-    print(f"SPY levels: {spy_levels}")
-    print(f"SPX levels: {spx_levels}")
-    print(f"NQ  levels: {nq_levels}")
+    print(f"[{instrument.upper()}] ETF levels:    {etf_levels}")
+    print(f"[{instrument.upper()}] Future levels: {future_levels}")
 
-    missing = [k for k, v in spx_levels.items() if v is None]
+    missing = [k for k, v in future_levels.items() if v is None]
+    stale   = len(missing) > 0
     if missing:
-        print(f"WARNING: missing levels: {missing} -- "
-              f"consider widening STRIKE_WINDOW or checking yfinance data quality",
+        print(f"WARNING [{instrument}]: missing levels: {missing} -- marked stale=true",
               file=sys.stderr)
 
     now = datetime.now(timezone.utc)
     payload = {
-        "version": "1.0",
-        "generated_at": now.isoformat(),
-        "trade_date": now.date().isoformat(),
-        "source": "yfinance/SPY",
-        "spy_spot": round(spy_spot, 2),
-        "spx_spot_est": round(spx_spot_est, 2),
-        "nq_spot": round(nq_spot, 2),
-        "spx_nq_ratio": round(ratio, 5),
-        "spy": spy_levels,
-        "spx": spx_levels,
-        "nq": nq_levels,
+        "instrument":  instrument,
+        "symbol":      cfg["symbol"],
+        "date":        now.date().isoformat(),
+        "fetched_at":  now.strftime("%Y-%m-%dT%H%M.%f")[:-3],
+        "gamma_flip":  future_levels["gamma_flip"],
+        "put_wall":    future_levels["put_wall"],
+        "call_wall":   future_levels["call_wall"],
+        "hvl":         future_levels["hvl"],
+        "vol_trigger": future_levels["vol_trigger"],
+        "source":      "yfinance_gex",
+        "stale":       stale,
     }
 
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUT_PATH.write_text(json.dumps(payload, indent=2))
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = OUT_DIR / f"{instrument}.json"
+    out_path.write_text(json.dumps(payload, indent=2))
 
-    HIST_DIR.mkdir(parents=True, exist_ok=True)
-    (HIST_DIR / f"{payload['trade_date']}.json").write_text(json.dumps(payload, indent=2))
+    day_dir = HIST_DIR / now.date().isoformat()
+    day_dir.mkdir(parents=True, exist_ok=True)
+    (day_dir / f"{instrument}.json").write_text(json.dumps(payload, indent=2))
 
-    print(f"Wrote {OUT_PATH}")
+    print(f"Wrote {out_path}")
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: build_gamma.py <nq|es>", file=sys.stderr)
+        sys.exit(2)
+    build(sys.argv[1].lower())
 
 
 if __name__ == "__main__":
