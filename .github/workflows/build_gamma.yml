@@ -2,18 +2,15 @@ name: Build Gamma Levels
 
 on:
   schedule:
-    # 6:30am ET = 10:30 UTC (EDT) / 11:30 UTC (EST)
-    # Run both; the script no-ops if it's the wrong one for current DST.
-    # Mon-Fri only.
-    - cron: '30 10 * * 1-5'   # EDT (Mar-Nov)
-    - cron: '30 11 * * 1-5'   # EST (Nov-Mar)
-  workflow_dispatch:          # manual trigger button in GitHub UI
+    - cron: '30 10 * * 1-5'   # 6:30am EDT (Mar-Nov)
+    - cron: '30 11 * * 1-5'   # 6:30am EST (Nov-Mar)
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write         # needs to commit gamma.json back to repo
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -24,19 +21,26 @@ jobs:
       - name: Install deps
         run: pip install yfinance pandas numpy scipy
 
-      - name: Build gamma.json
+      - name: Build NQ
+        run: python scripts/build_gamma.py nq
+        continue-on-error: true
+
+      - name: Build ES
+        run: python scripts/build_gamma.py es
+        continue-on-error: true
+
+      - name: Stage public outputs
         run: |
-          python scripts/build_gamma.py
-          mkdir -p public
-          cp data/gamma.json public/gamma.json
-          mkdir -p public/history
+          mkdir -p public public/history
+          cp data/gamma/nq.json public/nq.json 2>/dev/null || echo "nq.json missing"
+          cp data/gamma/es.json public/es.json 2>/dev/null || echo "es.json missing"
           cp -r data/history/* public/history/ 2>/dev/null || true
 
       - name: Commit if changed
         run: |
           git config user.name  "gamma-bot"
           git config user.email "gamma-bot@steelysystems.com"
-          git add data/gamma.json data/history/ public/
+          git add data/gamma/ data/history/ public/
           if git diff --cached --quiet; then
             echo "No changes."
           else
