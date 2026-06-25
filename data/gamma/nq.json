@@ -2,12 +2,12 @@
   "instrument": "nq",
   "symbol": "$IUXX",
   "date": "2026-06-25",
-  "fetched_at": "2026-06-25T1125.544",
-  "gamma_flip": 24184.63,
-  "put_wall": 29700.4,
-  "call_wall": 30209.55,
-  "hvl": 24184.63,
-  "vol_trigger": 27918.38,
+  "fetched_at": "2026-06-25T1217.369",
+  "gamma_flip": 24277.46,
+  "put_wall": 29706.31,
+  "call_wall": 30173.13,
+  "hvl": 24277.46,
+  "vol_trigger": 27923.93,
   "source": "yfinance_gex",
   "stale": false
 }
