@@ -2,12 +2,12 @@
   "instrument": "es",
   "symbol": "$ISPX",
   "date": "2026-08-27",
-  "fetched_at": "2026-08-27T1411.334",
-  "gamma_flip": 6190.66,
-  "put_wall": 7629.56,
-  "call_wall": 7729.95,
-  "hvl": 6190.66,
-  "vol_trigger": 7709.87,
+  "fetched_at": "2026-08-27T1511.962",
+  "gamma_flip": 7975.32,
+  "put_wall": 7630.77,
+  "call_wall": 7781.38,
+  "hvl": 7975.32,
+  "vol_trigger": 7731.18,
   "source": "yfinance_gex",
   "stale": false
 }
